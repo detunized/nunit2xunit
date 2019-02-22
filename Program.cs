@@ -16,14 +16,15 @@ namespace migrate
     {
         public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
         {
-            var newNode = TryConvertAssertThat(node);
+            var newNode = TryConvertAssertThatIsEqualTo(node);
             if (newNode != null)
                 return newNode;
 
             return base.VisitInvocationExpression(node);
         }
 
-        private SyntaxNode TryConvertAssertThat(InvocationExpressionSyntax node)
+        // Converts Assert.That(actual, Is.EqualTo(expected)) to Assert.Equal(expected, actual)
+        private SyntaxNode TryConvertAssertThatIsEqualTo(InvocationExpressionSyntax node)
         {
             if (!IsMethodCall(node, "Assert", "That"))
                 return null;
