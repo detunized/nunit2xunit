@@ -23,6 +23,14 @@ namespace migrate
             return base.VisitUsingDirective(node);
         }
 
+        public override SyntaxNode VisitAttributeList(AttributeListSyntax node)
+        {
+            if (ShouldRemoveTestFixture(node))
+                return null;
+
+            return base.VisitAttributeList(node);
+        }
+
         public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
         {
             var newNode = TryConvertAssertThatIsEqualTo(node);
@@ -30,6 +38,14 @@ namespace migrate
                 return newNode;
 
             return base.VisitInvocationExpression(node);
+        }
+
+        // Checks if the node is "[TestFixture]" and should be removed
+        private bool ShouldRemoveTestFixture(AttributeListSyntax node)
+        {
+            return node.Attributes.Count == 1 &&
+                node.Attributes[0].Name.ToString() == "TestFixture" &&
+                node.Parent is ClassDeclarationSyntax;
         }
 
         // Converts "using NUnit.Framework" to "using Xunit"
