@@ -28,6 +28,10 @@ namespace migrate
             if (ShouldRemoveTestFixture(node))
                 return null;
 
+            var newNode = TryConvertTestAttribute(node);
+            if (newNode != null)
+                return newNode;
+
             return base.VisitAttributeList(node);
         }
 
@@ -40,14 +44,6 @@ namespace migrate
             return base.VisitInvocationExpression(node);
         }
 
-        // Checks if the node is "[TestFixture]" and should be removed
-        private bool ShouldRemoveTestFixture(AttributeListSyntax node)
-        {
-            return node.Attributes.Count == 1 &&
-                node.Attributes[0].Name.ToString() == "TestFixture" &&
-                node.Parent is ClassDeclarationSyntax;
-        }
-
         // Converts "using NUnit.Framework" to "using Xunit"
         private SyntaxNode TryConvertUsingNunit(UsingDirectiveSyntax node)
         {
@@ -56,6 +52,35 @@ namespace migrate
 
             return
                 UsingDirective(IdentifierName("Xunit"))
+                .NormalizeWhitespace()
+                .WithTriviaFrom(node);
+        }
+
+        // Checks if the node is "[TestFixture]" and should be removed
+        private bool ShouldRemoveTestFixture(AttributeListSyntax node)
+        {
+            return node.Attributes.Count == 1 &&
+                node.Attributes[0].Name.ToString() == "TestFixture" &&
+                node.Parent is ClassDeclarationSyntax;
+        }
+
+        // Converts "[Test]" to "[Fact]"
+        private SyntaxNode TryConvertTestAttribute(AttributeListSyntax node)
+        {
+            if (node.Attributes.Count != 1)
+                return null;
+
+            if (node.Attributes[0].Name.ToString() != "Test")
+                return null;
+
+            if (!(node.Parent is MethodDeclarationSyntax))
+                return null;
+
+            return
+                AttributeList(
+                    SingletonSeparatedList<AttributeSyntax>(
+                        Attribute(
+                            IdentifierName("Fact"))))
                 .NormalizeWhitespace()
                 .WithTriviaFrom(node);
         }
