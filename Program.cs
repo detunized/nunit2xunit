@@ -49,11 +49,12 @@ namespace migrate
                         SyntaxKind.SimpleMemberAccessExpression,
                         IdentifierName("Assert"),
                         IdentifierName("Equal")))
-                    .WithArgumentList(
-                        ArgumentList(
-                            SeparatedList<ArgumentSyntax>(
-                                new SyntaxNodeOrToken[] {expected, Token(SyntaxKind.CommaToken), actual})))
-                    .WithTriviaFrom(node);
+                .WithArgumentList(
+                    ArgumentList(
+                        SeparatedList<ArgumentSyntax>(
+                            new SyntaxNodeOrToken[] {expected, Token(SyntaxKind.CommaToken), actual})))
+                .NormalizeWhitespace()
+                .WithTriviaFrom(node);
         }
 
         private bool IsMethodCall(ExpressionSyntax node, string objekt, string method)
@@ -83,9 +84,9 @@ namespace migrate
 
     static class Program
     {
-        static void ConvertFile(string path)
+        static void ConvertFile(string intputPath, string outputPath)
         {
-            var programTree = CSharpSyntaxTree.ParseText(File.ReadAllText(path)).WithFilePath(path);
+            var programTree = CSharpSyntaxTree.ParseText(File.ReadAllText(intputPath)).WithFilePath(outputPath);
             var compilation = CSharpCompilation.Create("nunit2xunit", new[] {programTree});
             foreach (var sourceTree in compilation.SyntaxTrees)
             {
@@ -105,7 +106,7 @@ namespace migrate
             }
 
             foreach (var arg in args)
-                ConvertFile(arg);
+                ConvertFile(arg, arg + ".xunit.cs");
         }
     }
 }
