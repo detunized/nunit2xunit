@@ -14,6 +14,15 @@ namespace migrate
 
     public class NunitToXunitRewriter: CSharpSyntaxRewriter
     {
+        public override SyntaxNode VisitUsingDirective(UsingDirectiveSyntax node)
+        {
+            var newNode = TryConvertUsingNunit(node);
+            if (newNode != null)
+                return newNode;
+
+            return base.VisitUsingDirective(node);
+        }
+
         public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
         {
             var newNode = TryConvertAssertThatIsEqualTo(node);
@@ -21,6 +30,18 @@ namespace migrate
                 return newNode;
 
             return base.VisitInvocationExpression(node);
+        }
+
+        // Converts "using NUnit.Framework" to "using Xunit"
+        private SyntaxNode TryConvertUsingNunit(UsingDirectiveSyntax node)
+        {
+            if (node.Name.ToString() != "NUnit.Framework")
+                return null;
+
+            return
+                UsingDirective(IdentifierName("Xunit"))
+                .NormalizeWhitespace()
+                .WithTriviaFrom(node);
         }
 
         // Converts Assert.That(actual, Is.EqualTo(expected)) to Assert.Equal(expected, actual)
