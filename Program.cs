@@ -59,9 +59,9 @@ namespace migrate
         // Checks if the node is "[TestFixture]" and should be removed
         private bool ShouldRemoveTestFixture(AttributeListSyntax node)
         {
-            return node.Attributes.Count == 1 &&
-                node.Attributes[0].Name.ToString() == "TestFixture" &&
-                node.Parent is ClassDeclarationSyntax;
+            return node.Attributes.Count == 1
+                && node.Attributes[0].Name.ToString() == "TestFixture"
+                && node.Parent is ClassDeclarationSyntax;
         }
 
         // Converts "[Test]" to "[Fact]"
@@ -143,6 +143,129 @@ namespace migrate
         {
             return ((InvocationExpressionSyntax)node).ArgumentList.Arguments.ToArray();
         }
+
+        private readonly ExpressionSyntax _pattern = Ast.Compile("Assert.That(@actual, Is.EqualTo(@expected))");
+
+        public override SyntaxNode VisitExpressionStatement(ExpressionStatementSyntax node)
+        {
+            if (Ast.Match(node.Expression, _pattern))
+                Console.WriteLine(node.Expression);
+
+            return base.VisitExpressionStatement(node);
+        }
+    }
+
+    public static class Ast
+    {
+        public static ExpressionSyntax Compile(string pattern)
+        {
+            return ParseExpression(pattern);
+        }
+
+        public static bool Match(SyntaxNode code, string pattern)
+        {
+            return Match(code, Compile(pattern));
+        }
+
+        public static bool Match(SyntaxNode code, SyntaxNode pattern)
+        {
+            // A placeholder matches anything
+            if (IsPlaceholder(pattern))
+                return true;
+
+            if (code.GetType() != pattern.GetType())
+                return false;
+
+            switch (code)
+            {
+            case ArgumentSyntax c:
+                {
+                    var p = (ArgumentSyntax)pattern;
+                    return Match(c.Expression, p.Expression);
+                }
+            case ArgumentListSyntax c:
+                {
+                    var p = (ArgumentListSyntax)pattern;
+                    return Match(c.OpenParenToken, p.OpenParenToken)
+                        && Match(c.Arguments, p.Arguments)
+                        && Match(c.CloseParenToken, p.CloseParenToken);
+                }
+            case IdentifierNameSyntax c:
+                {
+                    var p = (IdentifierNameSyntax)pattern;
+                    return Match(c.Identifier, p.Identifier);
+                }
+            case InvocationExpressionSyntax c:
+                {
+                    var p = (InvocationExpressionSyntax)pattern;
+                    return Match(c.Expression, p.Expression)
+                        && Match(c.ArgumentList, p.ArgumentList);
+                }
+            case LiteralExpressionSyntax c:
+                {
+                    var p = (LiteralExpressionSyntax)pattern;
+                    return Match(c.Token, p.Token);
+                }
+            case MemberAccessExpressionSyntax c:
+                {
+                    var p = (MemberAccessExpressionSyntax)pattern;
+                    return Match(c.Expression, p.Expression)
+                        && Match(c.Name, p.Name);
+                }
+            case GenericNameSyntax c:
+                {
+                    var p = (GenericNameSyntax)pattern;
+                    return Match(c.Identifier, p.Identifier)
+                        && Match(c.TypeArgumentList, p.TypeArgumentList);
+                }
+            case TypeArgumentListSyntax c:
+                {
+                    var p = (TypeArgumentListSyntax)pattern;
+                    return Match(c.LessThanToken, p.LessThanToken)
+                        && Match(c.Arguments, p.Arguments)
+                        && Match(c.GreaterThanToken, p.GreaterThanToken);
+                }
+            default:
+                return false;
+            }
+        }
+
+        private static bool Match<T>(SeparatedSyntaxList<T> code, SeparatedSyntaxList<T> pattern) where T: SyntaxNode
+        {
+            if (code.Count != pattern.Count)
+                return false;
+
+            for (var i = 0; i < code.Count; i++)
+                if (!Match(code[i], pattern[i]))
+                    return false;
+
+            return true;
+        }
+
+        private static bool Match(SyntaxToken code, SyntaxToken pattern)
+        {
+            if (IsPlaceholder(pattern.Text))
+                return true;
+
+            if (code.ValueText == pattern.ValueText)
+                return true;
+
+            return false;
+        }
+
+        private static bool IsPlaceholder(SyntaxNode pattern)
+        {
+            return pattern is IdentifierNameSyntax i
+                && IsPlaceholder(i.Identifier.Text);
+        }
+
+        private static bool IsPlaceholder(string name)
+        {
+            if (name == "_" || name.StartsWith("@"))
+                return true;
+
+            return false;
+        }
     }
 
     static class Program
@@ -160,16 +283,40 @@ namespace migrate
             }
         }
 
+        static void FindMatches(string filename, params string[] patterns)
+        {
+            var programTree = CSharpSyntaxTree.ParseText(File.ReadAllText(filename));
+            var compilation = CSharpCompilation.Create("nunit2xunit", new[] { programTree });
+            var compiledPatterns = patterns.Select(Ast.Compile);
+
+            foreach (var sourceTree in compilation.SyntaxTrees)
+            {
+                var nodes = sourceTree.GetRoot().DescendantNodes().OfType<ExpressionSyntax>();
+                foreach (var p in compiledPatterns)
+                {
+                    Console.WriteLine($"===[ {p} ]===");
+                    foreach (var e in nodes)
+                        if (Ast.Match(e, p))
+                            Console.WriteLine($"  {e}");
+                }
+            }
+        }
+
         static void Main(string[] args)
         {
-            if (args.Length < 1)
+            if (args.Length < 1 || args.Length > 2)
             {
-                Console.WriteLine("Usage: nunit2xunit file.cs ...");
+                Console.WriteLine("Usage: nunit2xunit input.cs [output.cs]");
                 return;
             }
 
-            foreach (var arg in args)
-                ConvertFile(arg, arg + ".xunit.cs");
+            if (false)
+                FindMatches(args[0], "Assert.That(@actual, Is.EqualTo(@expected))",
+                                     "Assert.That(@actual, Is.EqualTo(true))",
+                                     "Assert.That(@actual, Is.EqualTo(false))",
+                                     "Assert.That(@code, Throws._<_>())");
+            else
+                ConvertFile(args[0], args.Length < 2 ? args[0] : args[1]);
         }
     }
 }
