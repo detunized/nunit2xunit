@@ -10,6 +10,7 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace migrate
 {
+    using System.Collections.Generic;
     using static SyntaxFactory;
 
     public class NunitToXunitRewriter: CSharpSyntaxRewriter
@@ -143,128 +144,139 @@ namespace migrate
         {
             return ((InvocationExpressionSyntax)node).ArgumentList.Arguments.ToArray();
         }
-
-        private readonly ExpressionSyntax _pattern = Ast.Compile("Assert.That(@actual, Is.EqualTo(@expected))");
-
-        public override SyntaxNode VisitExpressionStatement(ExpressionStatementSyntax node)
-        {
-            if (Ast.Match(node.Expression, _pattern))
-                Console.WriteLine(node.Expression);
-
-            return base.VisitExpressionStatement(node);
-        }
     }
 
     public static class Ast
     {
+        private class Matcher
+        {
+            public readonly Dictionary<string, SyntaxNode> Matches = new Dictionary<string, SyntaxNode>();
+
+            public bool Match(SyntaxNode code, SyntaxNode pattern)
+            {
+                // A placeholder matches anything
+                if (IsPlaceholder(pattern))
+                {
+                    var name = pattern.ToFullString();
+                    if (name != "_")
+                        Matches[name] = code;
+
+                    return true;
+                }
+
+                if (code.GetType() != pattern.GetType())
+                    return false;
+
+                switch (code)
+                {
+                case ArgumentSyntax c:
+                    {
+                        var p = (ArgumentSyntax)pattern;
+                        return Match(c.Expression, p.Expression);
+                    }
+                case ArgumentListSyntax c:
+                    {
+                        var p = (ArgumentListSyntax)pattern;
+                        return Match(c.OpenParenToken, p.OpenParenToken)
+                            && Match(c.Arguments, p.Arguments)
+                            && Match(c.CloseParenToken, p.CloseParenToken);
+                    }
+                case IdentifierNameSyntax c:
+                    {
+                        var p = (IdentifierNameSyntax)pattern;
+                        return Match(c.Identifier, p.Identifier);
+                    }
+                case InvocationExpressionSyntax c:
+                    {
+                        var p = (InvocationExpressionSyntax)pattern;
+                        return Match(c.Expression, p.Expression)
+                            && Match(c.ArgumentList, p.ArgumentList);
+                    }
+                case LiteralExpressionSyntax c:
+                    {
+                        var p = (LiteralExpressionSyntax)pattern;
+                        return Match(c.Token, p.Token);
+                    }
+                case MemberAccessExpressionSyntax c:
+                    {
+                        var p = (MemberAccessExpressionSyntax)pattern;
+                        return Match(c.Expression, p.Expression)
+                            && Match(c.Name, p.Name);
+                    }
+                case GenericNameSyntax c:
+                    {
+                        var p = (GenericNameSyntax)pattern;
+                        return Match(c.Identifier, p.Identifier)
+                            && Match(c.TypeArgumentList, p.TypeArgumentList);
+                    }
+                case TypeArgumentListSyntax c:
+                    {
+                        var p = (TypeArgumentListSyntax)pattern;
+                        return Match(c.LessThanToken, p.LessThanToken)
+                            && Match(c.Arguments, p.Arguments)
+                            && Match(c.GreaterThanToken, p.GreaterThanToken);
+                    }
+                default:
+                    return false;
+                }
+            }
+
+            //
+            // Private
+            //
+
+            private bool Match<T>(SeparatedSyntaxList<T> code, SeparatedSyntaxList<T> pattern) where T : SyntaxNode
+            {
+                if (code.Count != pattern.Count)
+                    return false;
+
+                for (var i = 0; i < code.Count; i++)
+                    if (!Match(code[i], pattern[i]))
+                        return false;
+
+                return true;
+            }
+
+            private bool Match(SyntaxToken code, SyntaxToken pattern)
+            {
+                if (IsPlaceholder(pattern.Text))
+                    return true;
+
+                if (code.ValueText == pattern.ValueText)
+                    return true;
+
+                return false;
+            }
+
+            private bool IsPlaceholder(SyntaxNode pattern)
+            {
+                return pattern is IdentifierNameSyntax i
+                    && IsPlaceholder(i.Identifier.Text);
+            }
+
+            private bool IsPlaceholder(string name)
+            {
+                if (name == "_" || name.StartsWith("@"))
+                    return true;
+
+                return false;
+            }
+        }
+
         public static ExpressionSyntax Compile(string pattern)
         {
             return ParseExpression(pattern);
         }
 
-        public static bool Match(SyntaxNode code, string pattern)
+        public static Dictionary<string, SyntaxNode> Match(SyntaxNode code, string pattern)
         {
             return Match(code, Compile(pattern));
         }
 
-        public static bool Match(SyntaxNode code, SyntaxNode pattern)
+        public static Dictionary<string, SyntaxNode> Match(SyntaxNode code, SyntaxNode pattern)
         {
-            // A placeholder matches anything
-            if (IsPlaceholder(pattern))
-                return true;
-
-            if (code.GetType() != pattern.GetType())
-                return false;
-
-            switch (code)
-            {
-            case ArgumentSyntax c:
-                {
-                    var p = (ArgumentSyntax)pattern;
-                    return Match(c.Expression, p.Expression);
-                }
-            case ArgumentListSyntax c:
-                {
-                    var p = (ArgumentListSyntax)pattern;
-                    return Match(c.OpenParenToken, p.OpenParenToken)
-                        && Match(c.Arguments, p.Arguments)
-                        && Match(c.CloseParenToken, p.CloseParenToken);
-                }
-            case IdentifierNameSyntax c:
-                {
-                    var p = (IdentifierNameSyntax)pattern;
-                    return Match(c.Identifier, p.Identifier);
-                }
-            case InvocationExpressionSyntax c:
-                {
-                    var p = (InvocationExpressionSyntax)pattern;
-                    return Match(c.Expression, p.Expression)
-                        && Match(c.ArgumentList, p.ArgumentList);
-                }
-            case LiteralExpressionSyntax c:
-                {
-                    var p = (LiteralExpressionSyntax)pattern;
-                    return Match(c.Token, p.Token);
-                }
-            case MemberAccessExpressionSyntax c:
-                {
-                    var p = (MemberAccessExpressionSyntax)pattern;
-                    return Match(c.Expression, p.Expression)
-                        && Match(c.Name, p.Name);
-                }
-            case GenericNameSyntax c:
-                {
-                    var p = (GenericNameSyntax)pattern;
-                    return Match(c.Identifier, p.Identifier)
-                        && Match(c.TypeArgumentList, p.TypeArgumentList);
-                }
-            case TypeArgumentListSyntax c:
-                {
-                    var p = (TypeArgumentListSyntax)pattern;
-                    return Match(c.LessThanToken, p.LessThanToken)
-                        && Match(c.Arguments, p.Arguments)
-                        && Match(c.GreaterThanToken, p.GreaterThanToken);
-                }
-            default:
-                return false;
-            }
-        }
-
-        private static bool Match<T>(SeparatedSyntaxList<T> code, SeparatedSyntaxList<T> pattern) where T: SyntaxNode
-        {
-            if (code.Count != pattern.Count)
-                return false;
-
-            for (var i = 0; i < code.Count; i++)
-                if (!Match(code[i], pattern[i]))
-                    return false;
-
-            return true;
-        }
-
-        private static bool Match(SyntaxToken code, SyntaxToken pattern)
-        {
-            if (IsPlaceholder(pattern.Text))
-                return true;
-
-            if (code.ValueText == pattern.ValueText)
-                return true;
-
-            return false;
-        }
-
-        private static bool IsPlaceholder(SyntaxNode pattern)
-        {
-            return pattern is IdentifierNameSyntax i
-                && IsPlaceholder(i.Identifier.Text);
-        }
-
-        private static bool IsPlaceholder(string name)
-        {
-            if (name == "_" || name.StartsWith("@"))
-                return true;
-
-            return false;
+            var matcher = new Matcher();
+            return matcher.Match(code, pattern) ? matcher.Matches : null;
         }
     }
 
@@ -296,8 +308,15 @@ namespace migrate
                 {
                     Console.WriteLine($"===[ {p} ]===");
                     foreach (var e in nodes)
-                        if (Ast.Match(e, p))
+                    {
+                        var matches = Ast.Match(e, p);
+                        if (matches != null)
+                        {
                             Console.WriteLine($"  {e}");
+                            foreach (var m in matches)
+                                Console.WriteLine($"    {m.Key} = {m.Value}");
+                        }
+                    }
                 }
             }
         }
@@ -310,7 +329,7 @@ namespace migrate
                 return;
             }
 
-            if (false)
+            if (true)
                 FindMatches(args[0], "Assert.That(@actual, Is.EqualTo(@expected))",
                                      "Assert.That(@actual, Is.EqualTo(true))",
                                      "Assert.That(@actual, Is.EqualTo(false))",
