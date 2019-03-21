@@ -2,19 +2,25 @@
 // Licensed under the terms of the MIT license. See LICENCE for details.
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 
 namespace migrate
 {
-    using System.Collections.Generic;
     using static SyntaxFactory;
 
     public class NunitToXunitRewriter: CSharpSyntaxRewriter
     {
+        public NunitToXunitRewriter((string From, string To)[] findReplace)
+        {
+            _findReplace = findReplace.Select(x => (From: Ast.Compile(x.From), To: Ast.Compile(x.To))).ToArray();
+        }
+
         public override SyntaxNode VisitUsingDirective(UsingDirectiveSyntax node)
         {
             var newNode = TryConvertUsingNunit(node);
@@ -36,13 +42,17 @@ namespace migrate
             return base.VisitAttributeList(node);
         }
 
-        public override SyntaxNode VisitInvocationExpression(InvocationExpressionSyntax node)
+        // Find and replace (only in expression statements)
+        public override SyntaxNode VisitExpressionStatement(ExpressionStatementSyntax node)
         {
-            var newNode = TryConvertAssertThatIsEqualTo(node);
-            if (newNode != null)
-                return newNode;
+            foreach (var i in _findReplace)
+            {
+                var matches = Ast.Match(node.Expression, i.From);
+                if (matches != null)
+                    return node.Update((ExpressionSyntax)Ast.Replace(i.To, matches), node.SemicolonToken).WithTriviaFrom(node);
+            }
 
-            return base.VisitInvocationExpression(node);
+            return base.VisitExpressionStatement(node);
         }
 
         // Converts "using NUnit.Framework" to "using Xunit"
@@ -86,64 +96,7 @@ namespace migrate
                 .WithTriviaFrom(node);
         }
 
-        // Converts Assert.That(actual, Is.EqualTo(expected)) to Assert.Equal(expected, actual)
-        private SyntaxNode TryConvertAssertThatIsEqualTo(InvocationExpressionSyntax node)
-        {
-            if (!IsMethodCall(node, "Assert", "That"))
-                return null;
-
-            var assertThatArgs = GetCallArguments(node);
-            if (assertThatArgs.Length != 2)
-                return null;
-
-            var isEqualTo = assertThatArgs[1].Expression;
-            if (!IsMethodCall(isEqualTo, "Is", "EqualTo"))
-                return null;
-
-            var isEqualToArgs = GetCallArguments(isEqualTo);
-            if (isEqualToArgs.Length != 1)
-                return null;
-
-            var expected = isEqualToArgs[0];
-            var actual = assertThatArgs[0];
-
-            return
-                InvocationExpression(
-                    MemberAccessExpression(
-                        SyntaxKind.SimpleMemberAccessExpression,
-                        IdentifierName("Assert"),
-                        IdentifierName("Equal")))
-                .WithArgumentList(
-                    ArgumentList(
-                        SeparatedList<ArgumentSyntax>(
-                            new SyntaxNodeOrToken[] {expected, Token(SyntaxKind.CommaToken), actual})))
-                .NormalizeWhitespace()
-                .WithTriviaFrom(node);
-        }
-
-        private bool IsMethodCall(ExpressionSyntax node, string objekt, string method)
-        {
-            var invocation = node as InvocationExpressionSyntax;
-            if (invocation == null)
-                return false;
-
-            var memberAccess = invocation.Expression as MemberAccessExpressionSyntax;
-            if (memberAccess == null)
-                return false;
-
-            if ((memberAccess.Expression as IdentifierNameSyntax)?.Identifier.ValueText != objekt)
-                return false;
-
-            if (memberAccess.Name.Identifier.ValueText != method)
-                return false;
-
-            return true;
-        }
-
-        private ArgumentSyntax[] GetCallArguments(ExpressionSyntax node)
-        {
-            return ((InvocationExpressionSyntax)node).ArgumentList.Arguments.ToArray();
-        }
+        private (ExpressionSyntax From, ExpressionSyntax To)[] _findReplace;
     }
 
     public static class Ast
@@ -263,6 +216,105 @@ namespace migrate
             }
         }
 
+        private class Replacer
+        {
+            public static SyntaxNode Replace(SyntaxNode template, Dictionary<string, SyntaxNode> variables)
+            {
+                return new Replacer(variables).Replace(template).NormalizeWhitespace();
+            }
+
+            //
+            // Private
+            //
+
+            private readonly Dictionary<string, SyntaxNode> _variables;
+
+            private Replacer(Dictionary<string, SyntaxNode> variables)
+            {
+                _variables = variables;
+            }
+
+            private SyntaxNode Replace(SyntaxNode template)
+            {
+                // A placeholder matches anything
+                if (IsPlaceholder(template))
+                {
+                    var name = template.ToFullString();
+                    if (_variables.TryGetValue(name, out var v))
+                        return v;
+
+                    // No substitution found. Should we throw?
+                    return template;
+                }
+
+                switch (template)
+                {
+                case ArgumentSyntax t:
+                    return t.Update(t.NameColon,
+                                    t.RefKindKeyword,
+                                    (ExpressionSyntax)Replace(t.Expression));
+                case ArgumentListSyntax t:
+                    return t.Update(t.OpenParenToken,
+                                    Replace(t.Arguments),
+                                    t.CloseParenToken);
+                case IdentifierNameSyntax t:
+                    return t.Update(Replace(t.Identifier));
+                case InvocationExpressionSyntax t:
+                    return t.Update((ExpressionSyntax)Replace(t.Expression),
+                                    (ArgumentListSyntax)Replace(t.ArgumentList));
+                case LiteralExpressionSyntax t:
+                    return t.Update(Replace(t.Token));
+                case MemberAccessExpressionSyntax t:
+                    return t.Update((ExpressionSyntax)Replace(t.Expression),
+                                    t.OperatorToken,
+                                    (SimpleNameSyntax)Replace(t.Name));
+                case GenericNameSyntax t:
+                    return t.Update(Replace(t.Identifier),
+                                    (TypeArgumentListSyntax)Replace(t.TypeArgumentList));
+                case TypeArgumentListSyntax t:
+                    return t.Update(t.LessThanToken, Replace(t.Arguments), t.GreaterThanToken);
+                default:
+                    return template;
+                }
+            }
+
+            private SeparatedSyntaxList<T> Replace<T>(SeparatedSyntaxList<T> template) where T : SyntaxNode
+            {
+                var result = template;
+                for (int i = 0; i < result.Count; i++)
+                {
+                    var node = result[i];
+                    result = result.RemoveAt(i).Insert(i, (T)Replace(node));
+                }
+
+                return result;
+            }
+
+            private SyntaxToken Replace(SyntaxToken template)
+            {
+                // TODO: Check this!
+                return template;
+            }
+
+            //
+            // TODO: Share with Matcher
+            //
+
+            private bool IsPlaceholder(SyntaxNode pattern)
+            {
+                return pattern is IdentifierNameSyntax i
+                    && IsPlaceholder(i.Identifier.Text);
+            }
+
+            private bool IsPlaceholder(string name)
+            {
+                if (name == "_" || name.StartsWith("@"))
+                    return true;
+
+                return false;
+            }
+        }
+
         public static ExpressionSyntax Compile(string pattern)
         {
             return ParseExpression(pattern);
@@ -278,44 +330,72 @@ namespace migrate
             var matcher = new Matcher();
             return matcher.Match(code, pattern) ? matcher.Matches : null;
         }
+
+        public static SyntaxNode Replace(SyntaxNode template, Dictionary<string, SyntaxNode> variables)
+        {
+            return Replacer.Replace(template, variables);
+        }
     }
 
     static class Program
     {
-        static void ConvertFile(string intputPath, string outputPath)
+        static void ConvertFile(string intputPath, string outputPath, params (string From, string To)[] findReplace)
         {
-            var programTree = CSharpSyntaxTree.ParseText(File.ReadAllText(intputPath)).WithFilePath(outputPath);
+            var programTree = CSharpSyntaxTree.ParseText(File.ReadAllText(intputPath));
             var compilation = CSharpCompilation.Create("nunit2xunit", new[] {programTree});
+
             foreach (var sourceTree in compilation.SyntaxTrees)
             {
-                var rewriter = new NunitToXunitRewriter();
+                var rewriter = new NunitToXunitRewriter(findReplace);
                 var newSource = rewriter.Visit(sourceTree.GetRoot());
                 if (newSource != sourceTree.GetRoot())
-                    File.WriteAllText(sourceTree.FilePath, newSource.ToFullString());
+                {
+                    var text = newSource.ToFullString();
+                    if (outputPath == "-")
+                        Console.Write(text);
+                    else
+                        File.WriteAllText(outputPath, text);
+                }
+            }
+        }
+
+        static void ReplaceMatches(string filename, params (string From, string To)[] patterns)
+        {
+            var sourceTree = CSharpSyntaxTree.ParseText(File.ReadAllText(filename));
+            var compiledPatterns = patterns.Select(x => (From: Ast.Compile(x.From), To: Ast.Compile(x.To)));
+
+            var nodes = sourceTree.GetRoot().DescendantNodes().OfType<ExpressionSyntax>();
+            foreach (var p in compiledPatterns)
+            {
+                foreach (var e in nodes)
+                {
+                    var matches = Ast.Match(e, p.From);
+                    if (matches != null)
+                    {
+                        var r = Ast.Replace(p.To, matches);
+                        Console.WriteLine($"  {e} -> {r}");
+                    }
+                }
             }
         }
 
         static void FindMatches(string filename, params string[] patterns)
         {
-            var programTree = CSharpSyntaxTree.ParseText(File.ReadAllText(filename));
-            var compilation = CSharpCompilation.Create("nunit2xunit", new[] { programTree });
+            var sourceTree = CSharpSyntaxTree.ParseText(File.ReadAllText(filename));
             var compiledPatterns = patterns.Select(Ast.Compile);
 
-            foreach (var sourceTree in compilation.SyntaxTrees)
+            var nodes = sourceTree.GetRoot().DescendantNodes().OfType<ExpressionSyntax>();
+            foreach (var p in compiledPatterns)
             {
-                var nodes = sourceTree.GetRoot().DescendantNodes().OfType<ExpressionSyntax>();
-                foreach (var p in compiledPatterns)
+                Console.WriteLine($"===[ {p} ]===");
+                foreach (var e in nodes)
                 {
-                    Console.WriteLine($"===[ {p} ]===");
-                    foreach (var e in nodes)
+                    var matches = Ast.Match(e, p);
+                    if (matches != null)
                     {
-                        var matches = Ast.Match(e, p);
-                        if (matches != null)
-                        {
-                            Console.WriteLine($"  {e}");
-                            foreach (var m in matches)
-                                Console.WriteLine($"    {m.Key} = {m.Value}");
-                        }
+                        Console.WriteLine($"  {e}");
+                        foreach (var m in matches)
+                            Console.WriteLine($"    {m.Key} = {m.Value}");
                     }
                 }
             }
@@ -329,13 +409,24 @@ namespace migrate
                 return;
             }
 
-            if (true)
+            var asserts = new[]
+            {
+                ("Assert.That(@actual, Is.EqualTo(true))", "Assert.True(@actual)"),
+                ("Assert.That(@actual, Is.EqualTo(false))", "Assert.False(@actual)"),
+                ("Assert.That(@actual, Is.EqualTo(@expected))", "Assert.Equal(@expected, @actual)"),
+            };
+
+            if (false)
+                ReplaceMatches(args[0], ("Assert.That(@actual, Is.EqualTo(@expected))", "Assert.Equal(@expected, @actual)"),
+                                        ("Assert.That(@actual, Is.EqualTo(true))", "Assert.True(@actual)"),
+                                        ("Assert.That(@actual, Is.EqualTo(false))", "Assert.False(@actual)"));
+            else if (false)
                 FindMatches(args[0], "Assert.That(@actual, Is.EqualTo(@expected))",
                                      "Assert.That(@actual, Is.EqualTo(true))",
                                      "Assert.That(@actual, Is.EqualTo(false))",
                                      "Assert.That(@code, Throws._<_>())");
             else
-                ConvertFile(args[0], args.Length < 2 ? args[0] : args[1]);
+                ConvertFile(args[0], args.Length < 2 ? "-" : args[1], asserts);
         }
     }
 }
