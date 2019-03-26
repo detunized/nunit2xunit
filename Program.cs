@@ -414,17 +414,21 @@ namespace migrate
                 ("Assert.That(@actual, Is.EqualTo(true))", "Assert.True(@actual)"),
                 ("Assert.That(@actual, Is.EqualTo(false))", "Assert.False(@actual)"),
                 ("Assert.That(@actual, Is.EqualTo(@expected))", "Assert.Equal(@expected, @actual)"),
+                ("Assert.That(@code, Throws.TypeOf<@type>())", "Assert.Throws<@type>(@code)"),
             };
 
+            // Replace nodes (for testing)
             if (false)
                 ReplaceMatches(args[0], ("Assert.That(@actual, Is.EqualTo(@expected))", "Assert.Equal(@expected, @actual)"),
                                         ("Assert.That(@actual, Is.EqualTo(true))", "Assert.True(@actual)"),
                                         ("Assert.That(@actual, Is.EqualTo(false))", "Assert.False(@actual)"));
+            // Find nodes (for testing)
             else if (false)
                 FindMatches(args[0], "Assert.That(@actual, Is.EqualTo(@expected))",
                                      "Assert.That(@actual, Is.EqualTo(true))",
                                      "Assert.That(@actual, Is.EqualTo(false))",
                                      "Assert.That(@code, Throws._<_>())");
+            // The actual conversion
             else
                 ConvertFile(args[0], args.Length < 2 ? "-" : args[1], asserts);
         }
