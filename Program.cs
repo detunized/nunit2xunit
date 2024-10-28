@@ -412,7 +412,9 @@ namespace migrate
             var asserts = new[]
             {
                 ("Assert.That(@actual, Is.EqualTo(true))", "Assert.True(@actual)"),
+                ("Assert.That(@actual, Is.True)", "Assert.True(@actual)"),
                 ("Assert.That(@actual, Is.EqualTo(false))", "Assert.False(@actual)"),
+                ("Assert.That(@actual, Is.False)", "Assert.False(@actual)"),
                 ("Assert.That(@actual, Is.EqualTo(@expected))", "Assert.Equal(@expected, @actual)"),
                 ("Assert.That(@code, Throws.TypeOf<@type>())", "Assert.Throws<@type>(@code)"),
             };
