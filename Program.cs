@@ -416,7 +416,7 @@ namespace migrate
             var asserts = new[]
             {
                 //Assert conversions can be found at
-                //https://xunit.net/docs/comparisons
+                //https://xunit.net/docs/comparisons#assertions
                 ("Assert.That(@actual, Is.EqualTo(true))", "Assert.True(@actual)"),
                 ("Assert.That(@actual, Is.True)", "Assert.True(@actual)"),
                 ("Assert.That(@actual, Is.EqualTo(false))", "Assert.False(@actual)"),
