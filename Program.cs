@@ -239,7 +239,7 @@ namespace migrate
                 // A placeholder matches anything
                 if (IsPlaceholder(template))
                 {
-                    var name = template.ToFullString();
+                    var name = template.ToFullString().Trim();
                     if (_variables.TryGetValue(name, out var v))
                         return v;
 
@@ -257,6 +257,10 @@ namespace migrate
                     return t.Update(t.OpenParenToken,
                                     Replace(t.Arguments),
                                     t.CloseParenToken);
+                case BinaryExpressionSyntax t:
+                    return t.Update((ExpressionSyntax)Replace(t.Left),
+                                    t.OperatorToken,
+                                    (ExpressionSyntax)Replace(t.Right));
                 case IdentifierNameSyntax t:
                     return t.Update(Replace(t.Identifier));
                 case InvocationExpressionSyntax t:
@@ -411,9 +415,15 @@ namespace migrate
 
             var asserts = new[]
             {
+                //Assert conversions can be found at
+                //https://xunit.net/docs/comparisons#assertions
                 ("Assert.That(@actual, Is.EqualTo(true))", "Assert.True(@actual)"),
+                ("Assert.That(@actual, Is.True)", "Assert.True(@actual)"),
                 ("Assert.That(@actual, Is.EqualTo(false))", "Assert.False(@actual)"),
+                ("Assert.That(@actual, Is.False)", "Assert.False(@actual)"),
                 ("Assert.That(@actual, Is.EqualTo(@expected))", "Assert.Equal(@expected, @actual)"),
+                ("Assert.That(@actual, Is.GreaterThan(@expected))", "Assert.True(@actual > @expected)"),
+                ("Assert.That(@actual, Is.LessThan(@expected))", "Assert.True(@actual < @expected)"),
                 ("Assert.That(@code, Throws.TypeOf<@type>())", "Assert.Throws<@type>(@code)"),
             };
 
